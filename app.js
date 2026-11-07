@@ -29,10 +29,12 @@ const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 // ---------- Random Aussie and British names ----------
 const TITLES = ["Sir", "Dame", "Lord", "Lady", "Uncle", "Auntie", "Captain", "Professor"];
 const FIRSTS = ["Bazza", "Shazza", "Davo", "Gazza", "Wazza", "Kev", "Bev", "Trev", "Dazza", "Sheila", "Bruce", "Kylie", "Smithy", "Barry",
-  "Nigel", "Clive", "Mavis", "Gladys", "Reginald", "Agatha", "Percy", "Rupert", "Ethel", "Dougal", "Hamish", "Pip", "Tabitha", "Cuthbert", "Prudence", "Noreen"];
+  "Robbo", "Jonno", "Macca", "Shirl", "Nigel", "Clive", "Mavis", "Gladys", "Reginald", "Agatha", "Percy", "Rupert", "Ethel", "Dougal",
+  "Hamish", "Pip", "Tabitha", "Cuthbert", "Prudence", "Noreen", "Muriel", "Winifred", "Algernon", "Bertie", "Dot", "Fenella"];
 const SURNAMES = ["Lamington", "Crumpet", "Vegemite", "Pavlova", "Wallaby", "Bickerstaff", "Snodgrass", "Fairdinkum", "Teacake", "Scone",
   "Galah", "Kettleworth", "Biscuit", "Marmite", "Bunyip", "Flannelette", "Pemberton-Smythe", "Muddlecombe", "Thistlewood", "Pikelet",
-  "Jaffle", "Trifle", "Wombatson", "Brolly", "Sausage-Sizzle", "Cuppa", "Earl-Grey", "Drongo", "Knickerbocker", "Fish-Finger"];
+  "Jaffle", "Trifle", "Wombatson", "Brolly", "Sausage-Sizzle", "Cuppa", "Earl-Grey", "Drongo", "Knickerbocker", "Fish-Finger",
+  "Kookaburra", "Yabby", "Wigglesworth", "Fiddlesticks", "Bumbleford", "Puddleby", "Crumble", "Shortbread", "Fairweather", "Snickleway"];
 const PLACES = ["from Wagga Wagga", "from Woy Woy", "from Humpty Doo", "from Kangaroo Flat", "from Nowhere Else", "from Bendigo",
   "of Little Snoring", "of Nether Wallop", "of Chipping Sodbury", "of Westward Ho!", "of Great Snoring", "of Much Wenlock"];
 const EMOJIS = ["🦘", "🐨", "🦆", "🐑", "🦉", "🐧", "🦔", "🦊", "🐊", "🦜", "🦡", "🐝", "🦢", "🐻", "🦩", "🐸", "🦭", "🐢", "🐙", "🦖"];
@@ -42,6 +44,13 @@ function makeName() {
   if (Math.random() < .3) s = `${pick(TITLES)} ${s}`;
   if (Math.random() < .45) s += ` ${pick(PLACES)}`;
   return s;
+}
+// A name someone else already uses is never handed out; if two people still collide, the server adds "II".
+function uniqueName() {
+  const taken = new Set(S.people.filter(p => p.id !== S.me.id).map(p => p.name));
+  let n = makeName();
+  for (let i = 0; i < 50 && taken.has(n); i++) n = makeName();
+  return n;
 }
 const firstName = n => String(n).split(" ").find(w => !TITLES.includes(w)) || n;
 function hue(s) { let h = 0; for (const c of String(s)) h = (h * 31 + c.codePointAt(0)) >>> 0; return h % 360; }
@@ -78,7 +87,16 @@ const mine = () => S.people.find(p => p.id === S.me.id) || { pick: null, ratings
 // when config.json has a "sheetUrl" (the page then polls for changes).
 async function api(path, body = {}) {
   const payload = { token, name: S.me.name, emoji: S.me.emoji, ...body };
-  if (S.sheetUrl) return sheetPost(path, payload);
+  const j = S.sheetUrl ? await sheetPost(path, payload) : await localPost(path, payload);
+  // The server has the final say on my name (it may have added "II" to keep names unique).
+  if (j.name && j.name !== S.me.name && !rolling) {
+    S.me.name = j.name; store.set("lv-name", j.name);
+    render();
+  }
+  return j;
+}
+
+async function localPost(path, payload) {
   const r = await fetch("/api/" + path, {
     method: "POST", headers: { "content-type": "application/json" },
     body: JSON.stringify(payload),
@@ -463,7 +481,7 @@ async function reroll() {
   const nameEl = $("#me-name"); nameEl.classList.add("rolling");
   const steps = reduced ? 1 : 12;
   for (let i = 0; i < steps; i++) { nameEl.textContent = makeName(); await new Promise(r => setTimeout(r, 45 + i * 6)); }
-  S.me.name = makeName(); S.me.emoji = pick(EMOJIS);
+  S.me.name = uniqueName(); S.me.emoji = pick(EMOJIS);
   store.set("lv-name", S.me.name); store.set("lv-emoji", S.me.emoji);
   rolling = false; nameEl.classList.remove("rolling");
   render();
@@ -557,6 +575,10 @@ function applyState(d) {
   const fresh = S.ready && S.sheetUrl && S.seenActivity ? d.activity.filter(a => a.by !== S.me.id && !S.seenActivity.has(a.id)) : [];
   Object.assign(S, { people: d.people, comments: d.comments, activity: d.activity, closed: d.closed });
   if (d.config) S.config = d.config;
+  // Before my first vote, swap my name if someone else has just taken it.
+  if (!rolling && !S.people.some(p => p.id === S.me.id) && S.people.some(p => p.name === S.me.name)) {
+    S.me.name = uniqueName(); store.set("lv-name", S.me.name);
+  }
   S.ready = true;
   render(); tickCountdown();
   for (const a of fresh.reverse()) announce(a);
